@@ -1,45 +1,14 @@
 #include "imports/stdlib.fc";
+#include "imports/storage.fc";
+#include "imports/utils.fc";
 #include "imports/op.fc";
+#include "imports/errors.fc";
 #include "imports/params.fc";
 
 
-(slice, int, cell, cell, cell) load_data() inline {
-  var ds = get_data().begin_parse();
-  return (
-    ds~load_msg_addr(), ;; owner_address
-    ds~load_uint(64), ;; next_item_index
-    ds~load_ref(), ;; content
-    ds~load_ref(), ;; nft_item_code
-    ds~load_ref()  ;; royalty_params
-  );
-}
-
-() save_data(slice owner_address, int next_item_index, cell content, cell nft_item_code, cell royalty_params) impure inline {
-  set_data(
-    begin_cell()
-        .store_slice(owner_address)
-        .store_uint(next_item_index, 64)
-        .store_ref(content)
-        .store_ref(nft_item_code)
-        .store_ref(royalty_params)
-    .end_cell()
-  );
-}
-
-cell calculate_nft_item_state_init(int item_index, cell nft_item_code) inline {
-  cell data = begin_cell().store_uint(item_index, 64).store_slice(my_address()).end_cell();
-  return begin_cell().store_uint(0, 2).store_dict(nft_item_code).store_dict(data).store_uint(0, 1).end_cell();
-}
-
-slice calculate_nft_item_address(int wc, cell state_init) inline {
-  return begin_cell()
-          .store_uint(4, 3)
-           .store_int(wc, 8)
-           .store_uint(cell_hash(state_init), 256)
-          .end_cell().begin_parse();
-}
-
-() deploy_nft_item(int item_index, cell nft_item_code, int amount, cell nft_content) impure inline {
+() deploy_nft_item(int item_index, cell nft_item_code, 
+                    int amount, cell nft_content) impure inline {
+ 
   cell state_init = calculate_nft_item_state_init(item_index, nft_item_code);
   slice nft_address = calculate_nft_item_address(workchain(), state_init);
   var msg = begin_cell()
@@ -54,17 +23,17 @@ slice calculate_nft_item_address(int wc, cell state_init) inline {
 
 () send_royalty_params(slice to_address, int query_id, slice data) impure inline {
   var msg = begin_cell()
-    .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool packages:MsgAddress -> 011000
-    .store_slice(to_address)
-    .store_coins(0)
-    .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-    .store_uint(op::report_royalty_params(), 32)
-    .store_uint(query_id, 64)
-    .store_slice(data);
+            .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool packages:MsgAddress -> 011000
+            .store_slice(to_address)
+            .store_coins(0)
+            .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .store_uint(op::report_royalty_params(), 32)
+            .store_uint(query_id, 64)
+            .store_slice(data);
   send_raw_message(msg.end_cell(), 64); ;; carry all the remaining value of the inbound message
 }
 
-() recv_internal(cell in_msg_full, slice in_msg_body) impure {
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
     if (in_msg_body.slice_empty?()) { ;; ignore empty messages
         return ();
     }
@@ -78,57 +47,63 @@ slice calculate_nft_item_address(int wc, cell state_init) inline {
 
     int op = in_msg_body~load_uint(32);
     int query_id = in_msg_body~load_uint(64);
-
-    var (owner_address, next_item_index, content, nft_item_code, royalty_params) = load_data();
+    
+    load_data();
 
     if (op == op::get_royalty_params()) {
         send_royalty_params(sender_address, query_id, royalty_params.begin_parse());
         return ();
     }
 
-    throw_unless(401, equal_slices(sender_address, owner_address));
+    if (equal_slice(sender_address, storage::owner_address)) {
+      handle_admin_messages(op, query_id, in_msg_body);
+      return ();
+    }
 
-
-    if (op == 1) { ;; deploy new nft
-      int item_index = in_msg_body~load_uint(64);
-      throw_unless(402, item_index <= next_item_index);
-      var is_last = item_index == next_item_index;
-      deploy_nft_item(item_index, nft_item_code, in_msg_body~load_coins(), in_msg_body~load_ref());
-      if (is_last) {
-        next_item_index += 1;
-        save_data(owner_address, next_item_index, content, nft_item_code, royalty_params);
+    if (op::transfer_notification) {
+      (int jetton_amount, slice from_user) = (in_msg_body~load_coins(), 
+                                                in_msg_body~load_msg_addr());
+      ifnot ((equal_slice(sender_address, storage::jetton_wallet_address)) & 
+              (msg_value >= min_tons_for_nft_deploy )) {
+        ;; TO DO
+        builder jtn_transfer_body = create_jtn_transfer_body();
+        send_simple_message();
+        return ();
       }
+
+      int percent_one_day = storage::percent_year / 365;
+      int interest_one_day = muldiv(jetton_amount, percent_one_day, hundred_percent);
+      int interest = interect_one_day * storage::lockup_period;
+      storage::current_reward += interest;
+      if (storage::total_reward < storage::current_reward) {
+        ;; TO DO
+        builder jtn_transfer_body = create_jtn_transfer_body();
+        send_siple_message();
+        return ();
+      }
+
+      int now = now();
+      cell nft_content = begin_cell()
+        .store_slice(from_user)
+        .store_ref(
+          begin_cell()
+            .store_uint(now + (storage::lockup_period * seconds_per_day), 64)
+            .store_coins(interest)
+            .store_coins(jetton_amount)
+          .end_cell()
+        )
+        .end_cell();
+
+      deploy_nft_item(storage::next_item_index, 
+                      storage::nft_item_code, 
+                      min_tons_for_nft_deploy, cell nft_content);
+      storage::next_item_index += 1;
+      storage::total_reward += jetton_amount;
+      save_data();
       return ();
     }
-    
-    if (op == 2) { ;; batch deploy of new nfts
-      int counter = 0;
-      cell deploy_list = in_msg_body~load_ref();
-      do {
-        var (item_index, item, f?) = deploy_list~udict::delete_get_min(64);
-        if (f?) {
-          counter += 1;
-          if (counter >= 250) { ;; Limit due to limits of action list size
-            throw(399);
-          }
 
-          throw_unless(403 + counter, item_index <= next_item_index);
-          deploy_nft_item(item_index, nft_item_code, item~load_coins(), item~load_ref());
-          if (item_index == next_item_index) {
-            next_item_index += 1;
-          }
-        }
-      } until ( ~ f?);
-      save_data(owner_address, next_item_index, content, nft_item_code, royalty_params);
-      return ();
-    } 
-
-    if (op == 3) { ;; change owner
-      slice new_owner = in_msg_body~load_msg_addr();
-      save_data(new_owner, next_item_index, content, nft_item_code, royalty_params);
-      return ();
-    }
-    throw(0xffff);
+    throw(error::unknown_op);
 }
 
 ;; Get methods

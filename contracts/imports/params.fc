@@ -1,8 +1,4 @@
-int workchain() asm "0 PUSHINT";
 
-() force_chain(slice addr) impure {
-  (int wc, _) = parse_std_addr(addr);
-  throw_unless(333, wc == workchain());
-}
-
-slice null_addr() asm "b{00} PUSHSLICE";
+const int min_tons_for_nft_deploy = 50000000;
+const int hundred_percent = 1000000000;
+const int seconds_per_day = 86400;
