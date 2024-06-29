@@ -8,3 +8,6 @@ int op::report_royalty_params() asm "0xa8cb00ad PUSHINT";
 
 const op::set_jetton_wallet_address = 0xee87d2d4;
 const op::top_up_jtn_balance = 0x77b2286b;
+const op::unstake = 0xd5b5e9ad;
+const op::process_unstake = 0x13846656;
+const op::destroy = 0x1f04537a;
