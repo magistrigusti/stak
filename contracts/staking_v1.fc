@@ -54,13 +54,11 @@
     load_data();
 
     if (op == op::get_royalty_params()) {
-        send_royalty_params(sender_address, 
-                            query_id, 
-                            royalty_params.begin_parse());
+        send_royalty_params(sender_address, query_id, royalty_params.begin_parse());
         return ();
     }
 
-    if (equal_slice(sender_address, storage::owner_address)) {
+    if (equal_slices(sender_address, storage::owner_address)) {
       handle_admin_messages(op, query_id, in_msg_body);
       return ();
     }
@@ -114,7 +112,7 @@
     if (op == op::process_unstake) {
       int idx = in_msg_body~load_uint(256);
       throw_unless(error::wrong_sender, 
-        equal_slice(sender_address, calculate_nft_item_address(0, 
+        equal_slices(sender_address, calculate_nft_item_address(0, 
         calculate_nft_item_state_init(idx, storage::nft_item_code))));
       slice from_user = in_msg_body~load_msg_addr();
       slice staking_params = in_msg_body~load_ref().begin_parse();
@@ -169,4 +167,18 @@ cell get_nft_content(int index, cell individual_nft_content) method_id {
             .store_slice(common_content)
             .store_ref(individual_nft_content)
           .end_cell());
+}
+
+slice get_jetton_wallet_address() method_id {
+  load_data();
+  return storage::jetton_wallet_address;
+}
+
+(int, int, int, int) get_staking_data() method_id {
+  return (
+    storage::percent_year,
+    storage::lockup_period,
+    strage::total_reward,
+    storag::current_reward
+  );
 }
